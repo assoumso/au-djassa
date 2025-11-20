@@ -67,6 +67,7 @@ export interface Order {
   quantity: number;
   totalPrice: number;
   shippingFees?: number; // Frais de livraison
+  serviceFees?: number; // Frais de service
   supplierId: string; // ID du fournisseur concerné
   customerName: string;
   customerContact: string; // Nouveau champ pour le téléphone du client

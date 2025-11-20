@@ -1,10 +1,10 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Product, Order, OrderStatus, Message } from '../types';
 import { 
   Plus, Sparkles, X, Package, ShoppingCart, DollarSign, 
   MessageSquare, Settings, CheckCircle, AlertCircle, 
-  Truck, Clock, Trash2, UploadCloud, Smartphone, Rocket, Banknote, Image as ImageIcon, Phone, MapPin
+  Truck, Clock, Trash2, UploadCloud, Smartphone, Rocket, Banknote, Image as ImageIcon, Phone, MapPin, Bell, Volume2, Pencil, Play
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -14,6 +14,7 @@ interface SupplierDashboardProps {
   products: Product[];
   orders: Order[];
   onAddProduct: (product: Product) => void;
+  onUpdateProduct: (product: Product) => void;
   onUpdateOrderStatus: (orderId: string, status: OrderStatus) => void;
   onDeleteProduct: (id: string) => void;
 }
@@ -26,18 +27,20 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
   products, 
   orders,
   onAddProduct,
+  onUpdateProduct,
   onUpdateOrderStatus,
   onDeleteProduct
 }) => {
   // Filter products for this supplier
   const myProducts = products.filter(p => p.supplierId === supplierId);
   
-  // Initialize activeTab: default to 'products' if catalogue is empty to encourage onboarding
+  // Initialize activeTab
   const [activeTab, setActiveTab] = useState<DashboardTab>(() => {
     return myProducts.length === 0 ? 'products' : 'overview';
   });
 
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   
   // --- Product Form State ---
   const [name, setName] = useState('');
@@ -50,9 +53,137 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
   // --- KYC State ---
   const [kycStatus, setKycStatus] = useState<'pending' | 'verified' | 'unverified'>('unverified');
 
-  // --- Filtered Data ---
-  // CORRECTION: Filter orders to show only those belonging to this supplier
+  // --- Filtered Data & Notification Logic ---
   const myOrders = orders.filter(o => o.supplierId === supplierId); 
+  
+  // Référence pour stocker le nombre de commandes précédent
+  const prevOrderCountRef = useRef(myOrders.length);
+  const isFirstRender = useRef(true);
+  const [lastNotification, setLastNotification] = useState<string | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState('default');
+
+  // Vérification permission notification au montage
+  useEffect(() => {
+    if ('Notification' in window) {
+      setNotificationPermission(Notification.permission);
+    }
+  }, []);
+
+  // Fonction pour demander la permission (doit être déclenchée par un clic)
+  const requestNotificationPermission = () => {
+    if ('Notification' in window) {
+      Notification.requestPermission().then(permission => {
+        setNotificationPermission(permission);
+        if (permission === 'granted') {
+          new Notification("Notifications activées", {
+            body: "Vous serez alerté ici à chaque nouvelle commande.",
+            icon: '/icon.png'
+          });
+          playNotificationSound(); // Petit son de confirmation
+        }
+      });
+    }
+  };
+
+  // Fonction améliorée pour jouer un son de notification (Double Bip)
+  const playNotificationSound = () => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContext) return;
+      
+      const ctx = new AudioContext();
+      
+      // Tentative de reprise si le contexte est suspendu
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(e => console.error("Impossible de démarrer l'audio:", e));
+      }
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      const now = ctx.currentTime;
+      
+      // Séquence plus "Alarme"
+      // Note 1
+      osc.frequency.setValueAtTime(880, now); // A5
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+
+      // Note 2
+      osc.frequency.setValueAtTime(1174.66, now + 0.3); // D6
+      gain.gain.setValueAtTime(0.2, now + 0.3);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
+      
+      // Note 3 (Répétition Note 1)
+      osc.frequency.setValueAtTime(880, now + 0.6); // A5
+      gain.gain.setValueAtTime(0.2, now + 0.6);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.9);
+
+      osc.start(now);
+      osc.stop(now + 1.0);
+    } catch (e) {
+      console.error("Erreur lecture son:", e);
+    }
+  };
+
+  // Fonction pour déclencher l'alerte mobile (Vibration + Notification Système)
+  const triggerMobileAlert = (message: string) => {
+    // 1. Vibration (si supporté par le mobile)
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        // Vibration longue et distincte
+        navigator.vibrate([500, 200, 500]); 
+      } catch (e) {
+        console.warn("Vibration non supportée ou bloquée");
+      }
+    }
+
+    // 2. Notification Système Native
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        const notif = new Notification("Au Djassa - Nouvelle Commande !", {
+          body: message,
+          icon: '/icon.png',
+          vibrate: [500, 200, 500],
+          tag: 'new-order',
+          requireInteraction: true // La notif reste jusqu'à ce qu'on clique
+        } as any);
+        notif.onclick = () => {
+          window.focus();
+          setActiveTab('orders');
+          notif.close();
+        };
+      } catch (e) {
+        console.error("Erreur notification native:", e);
+      }
+    }
+  };
+
+  // Effet pour détecter les nouvelles commandes
+  useEffect(() => {
+    if (isFirstRender.current) {
+      prevOrderCountRef.current = myOrders.length;
+      isFirstRender.current = false;
+      return;
+    }
+
+    if (myOrders.length > prevOrderCountRef.current) {
+      const notifMsg = `Vous avez reçu une nouvelle commande de ${myOrders[0].totalPrice.toLocaleString()} FCFA !`;
+      console.log("Nouvelle commande détectée ! Alerte...");
+      
+      playNotificationSound();
+      triggerMobileAlert(notifMsg);
+      
+      setLastNotification(notifMsg);
+      setTimeout(() => setLastNotification(null), 10000); 
+    }
+
+    prevOrderCountRef.current = myOrders.length;
+  }, [myOrders.length]); 
+
   
   // --- Stats ---
   const totalRevenue = myOrders.reduce((sum, order) => order.status !== OrderStatus.CANCELLED ? sum + order.totalPrice : sum, 0);
@@ -94,7 +225,6 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, width, height);
-            // Compression JPEG à 0.6 pour s'assurer que le fichier est léger (< 1Mo pour Firestore)
             const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
             setSelectedImage(dataUrl);
           }
@@ -106,27 +236,56 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
     }
   };
 
+  const handleEditProduct = (product: Product) => {
+    setEditingProduct(product);
+    setName(product.name);
+    setPrice(product.price.toString());
+    setCategory(product.category);
+    setDescription(product.description);
+    setSelectedImage(product.imageUrl);
+    setIsFormOpen(true);
+  };
+
+  const handleNewProduct = () => {
+    setEditingProduct(null);
+    resetForm();
+    setIsFormOpen(true);
+  };
+
   const handleSubmitProduct = (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Image par défaut si aucune n'est sélectionnée
     const defaultImage = "https://images.unsplash.com/photo-1556761175-5973dc0f32e7?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&q=80";
 
-    const newProduct: Product = {
-      id: `p-${Date.now()}`,
-      name,
-      price: parseFloat(price),
-      category, // Sera toujours 'Service'
-      description,
-      supplierId,
-      supplierName,
-      imageUrl: selectedImage || defaultImage,
-      tags: [], // Tags supprimés
-      createdAt: Date.now()
-    };
-    onAddProduct(newProduct);
+    if (editingProduct) {
+      const updatedProduct: Product = {
+        ...editingProduct,
+        name,
+        price: parseFloat(price),
+        category,
+        description,
+        imageUrl: selectedImage || editingProduct.imageUrl,
+      };
+      onUpdateProduct(updatedProduct);
+    } else {
+      const newProduct: Product = {
+        id: `p-${Date.now()}`,
+        name,
+        price: parseFloat(price),
+        category,
+        description,
+        supplierId,
+        supplierName,
+        imageUrl: selectedImage || defaultImage,
+        tags: [], 
+        createdAt: Date.now()
+      };
+      onAddProduct(newProduct);
+    }
+    
     setIsFormOpen(false);
     resetForm();
+    setEditingProduct(null);
   };
 
   const resetForm = () => {
@@ -181,6 +340,41 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
       case 'overview':
         return (
           <div className="space-y-8 animate-in fade-in duration-300">
+            {/* Banner Permission Notification */}
+            {notificationPermission !== 'granted' && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-between">
+                <div className="flex items-center text-blue-700">
+                  <Bell className="w-5 h-5 mr-3" />
+                  <div>
+                    <p className="font-bold text-sm">Activez les notifications !</p>
+                    <p className="text-xs">Pour être alerté en temps réel des nouvelles commandes, autorisez les notifications.</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={requestNotificationPermission}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors"
+                >
+                  Autoriser
+                </button>
+              </div>
+            )}
+
+            {/* Notification Toast */}
+            {lastNotification && (
+              <div className="bg-indigo-600 text-white px-6 py-4 rounded-lg shadow-xl flex items-center justify-between animate-bounce fixed top-24 right-4 z-50 w-[90%] md:w-auto border-2 border-white/20">
+                <div className="flex items-center cursor-pointer" onClick={() => setActiveTab('orders')}>
+                  <Volume2 className="w-6 h-6 mr-3 animate-pulse" />
+                  <div>
+                     <span className="font-bold text-sm md:text-base block">{lastNotification}</span>
+                     <span className="text-xs opacity-90">Cliquez pour voir</span>
+                  </div>
+                </div>
+                <button onClick={() => setLastNotification(null)} className="text-white/80 hover:text-white ml-4">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            )}
+
             {myProducts.length === 0 && (
               <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-6 flex items-start shadow-sm">
                  <div className="bg-indigo-100 p-3 rounded-lg mr-4 hidden sm:block">
@@ -259,7 +453,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
              <div className="flex justify-between items-center">
                <h2 className="text-2xl font-bold text-slate-900">Mon Catalogue</h2>
                <button 
-                  onClick={() => setIsFormOpen(true)}
+                  onClick={handleNewProduct}
                   className="flex items-center bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm"
                 >
                   <Plus className="w-5 h-5 mr-2" />
@@ -278,7 +472,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
                       C'est le moment de lancer votre activité ! Ajoutez vos produits pour qu'ils soient visibles instantanément par les acheteurs sur la plateforme.
                     </p>
                     <button 
-                      onClick={() => setIsFormOpen(true)}
+                      onClick={handleNewProduct}
                       className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all transform hover:-translate-y-1 flex items-center mx-auto"
                     >
                       <Sparkles className="w-5 h-5 mr-2" />
@@ -308,12 +502,20 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
                         <td className="px-6 py-4 font-medium text-slate-900">{product.price.toLocaleString()} FCFA</td>
                         <td className="px-6 py-4 text-slate-500">{new Date(product.createdAt).toLocaleDateString()}</td>
                         <td className="px-6 py-4 text-right">
-                          <button 
-                            onClick={() => onDeleteProduct(product.id)}
-                            className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex justify-end gap-2">
+                            <button 
+                              onClick={() => handleEditProduct(product)}
+                              className="text-blue-500 hover:text-blue-700 p-2 hover:bg-blue-50 rounded transition-colors"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => onDeleteProduct(product.id)}
+                              className="text-red-500 hover:text-red-700 p-2 hover:bg-red-50 rounded transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -339,7 +541,7 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
             ) : (
             <div className="grid gap-4">
               {myOrders.map(order => (
-                <div key={order.id} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div key={order.id} className={`bg-white p-6 rounded-xl shadow-sm border flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all ${order.status === OrderStatus.PENDING ? 'border-indigo-200 shadow-indigo-50 ring-1 ring-indigo-100' : 'border-slate-200'}`}>
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2">
                       <span className="font-mono text-xs text-slate-400">#{order.id.slice(-6)}</span>
@@ -367,7 +569,8 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
                         <MapPin className="w-3 h-3 mr-1" /> {order.shippingAddress}
                       </p>
                       <div className="flex gap-4 text-xs pt-1 border-t border-slate-100 mt-2">
-                        <span>Produits: {(order.quantity * (order.totalPrice - (order.shippingFees || 0)) / order.quantity).toLocaleString()} FCFA</span>
+                        <span>Produits: {(order.quantity * (order.totalPrice - (order.shippingFees || 0) - (order.serviceFees || 0)) / order.quantity).toLocaleString()} FCFA</span>
+                        {order.serviceFees && <span>+ Service: {order.serviceFees} FCFA</span>}
                       </div>
                     </div>
                   </div>
@@ -514,6 +717,26 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
           <div className="max-w-3xl">
             <h2 className="text-2xl font-bold text-slate-900 mb-6">Paramètres & Vérification</h2>
             
+            {/* Sound Test Button */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
+              <div className="flex items-center justify-between">
+                 <div>
+                   <h3 className="text-lg font-bold text-slate-900">Test des Notifications</h3>
+                   <p className="text-sm text-slate-500">Vérifiez que vous entendez bien l'alerte de commande.</p>
+                 </div>
+                 <button 
+                   onClick={() => {
+                     playNotificationSound();
+                     triggerMobileAlert("Test de notification réussi !");
+                   }}
+                   className="flex items-center bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition-colors"
+                 >
+                   <Play className="w-4 h-4 mr-2" />
+                   Tester l'alerte
+                 </button>
+              </div>
+            </div>
+
             {/* KYC Section */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
               <div className="flex items-center justify-between mb-6">
@@ -618,7 +841,9 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
                 <item.icon className="w-5 h-5 mr-3" />
                 {item.label}
                 {item.id === 'orders' && pendingOrdersCount > 0 && (
-                  <span className="ml-auto bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full">{pendingOrdersCount}</span>
+                  <span className="ml-auto bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full flex items-center justify-center min-w-[20px]">
+                    {pendingOrdersCount}
+                  </span>
                 )}
               </button>
             ))}
@@ -636,7 +861,9 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="text-xl font-bold text-slate-900">Nouveau Produit (Service)</h3>
+              <h3 className="text-xl font-bold text-slate-900">
+                {editingProduct ? 'Modifier le Produit' : 'Nouveau Produit (Service)'}
+              </h3>
               <button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-6 h-6" />
               </button>
@@ -702,8 +929,17 @@ export const SupplierDashboard: React.FC<SupplierDashboardProps> = ({
                     Annuler
                   </button>
                   <button type="submit" className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center">
-                    <Plus className="w-5 h-5 mr-2" />
-                    Publier le Produit
+                    {editingProduct ? (
+                       <>
+                         <Pencil className="w-5 h-5 mr-2" />
+                         Mettre à jour
+                       </>
+                    ) : (
+                       <>
+                         <Plus className="w-5 h-5 mr-2" />
+                         Publier le Produit
+                       </>
+                    )}
                   </button>
                 </div>
               </form>

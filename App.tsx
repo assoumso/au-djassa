@@ -274,6 +274,23 @@ const App: React.FC = () => {
     }
   };
 
+  // NOUVELLE FONCTION DE MISE À JOUR
+  const handleUpdateProduct = async (updatedProduct: Product) => {
+    try {
+      const { id, ...productData } = updatedProduct;
+      await updateDoc(doc(db, 'products', id), productData);
+      alert("Produit mis à jour avec succès !");
+    } catch (error: any) {
+      if (error.code === 'permission-denied' || error.message?.includes('Missing or insufficient permissions')) {
+          setProducts(prev => prev.map(p => p.id === updatedProduct.id ? updatedProduct : p));
+          alert("Produit mis à jour (Mode Local actif).");
+      } else {
+          console.error("Erreur mise à jour produit:", error);
+          alert(`Erreur : ${error.message}`);
+      }
+    }
+  };
+
   const handleDeleteProduct = async (id: string) => {
     if (confirm('Êtes-vous sûr de vouloir supprimer ce produit ?')) {
       try {
@@ -401,6 +418,7 @@ const App: React.FC = () => {
             products={products} 
             orders={orders}
             onAddProduct={handleAddProduct} 
+            onUpdateProduct={handleUpdateProduct} 
             onUpdateOrderStatus={handleUpdateOrderStatus}
             onDeleteProduct={handleDeleteProduct}
           />
@@ -441,25 +459,6 @@ const App: React.FC = () => {
       <main className="flex-1">
         {renderView()}
       </main>
-      
-      {/* Footer & Helpers */}
-      <div className="bg-white border-t border-slate-200 p-2">
-         <div className="flex items-center justify-between max-w-7xl mx-auto px-4">
-            <div className="flex items-center text-xs text-emerald-600 font-medium">
-              <span className="w-2 h-2 bg-emerald-500 rounded-full mr-2 animate-pulse"></span>
-              Connecté à Firebase
-            </div>
-            
-            <button 
-              onClick={handleSeedDatabase}
-              className="flex items-center text-xs font-bold text-slate-500 hover:text-indigo-600 transition-colors bg-slate-100 hover:bg-indigo-50 px-3 py-1 rounded-md border border-slate-200"
-              title="Créer les collections dans Firebase si elles n'existent pas"
-            >
-              <Database className="w-3 h-3 mr-1" />
-              Initialiser BDD (Créer Collections)
-            </button>
-         </div>
-      </div>
     </div>
   );
 };

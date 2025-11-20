@@ -1,6 +1,7 @@
+
 import React, { useState, useMemo } from 'react';
 import { Product, Supplier, Order, OrderStatus, PaymentDetails } from '../types';
-import { Search, Filter, Tag, X, MessageSquare, Building2, Star, CheckCircle, LayoutGrid, Users, ShoppingBag, Smartphone, CreditCard, Banknote, MapPin, User, Phone, Bell } from 'lucide-react';
+import { Search, Filter, Tag, X, MessageSquare, Building2, Star, CheckCircle, LayoutGrid, Users, ShoppingBag, Smartphone, CreditCard, Banknote, MapPin, User, Phone, Bell, ArrowLeft, AlertCircle } from 'lucide-react';
 
 interface ClientMarketplaceProps {
   products: Product[];
@@ -11,9 +12,13 @@ interface ClientMarketplaceProps {
 type TabView = 'products' | 'suppliers';
 
 export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, suppliers, onCreateOrder }) => {
-  const [activeTab, setActiveTab] = useState<TabView>('products');
+  // MODIFICATION : L'onglet par défaut est maintenant 'suppliers'
+  const [activeTab, setActiveTab] = useState<TabView>('suppliers');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Tout');
+  
+  // MODIFICATION : Nouvel état pour stocker le fournisseur sélectionné
+  const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<Supplier | null>(null);
   
   // Product Detail Modal State
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -22,6 +27,7 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutStep, setCheckoutStep] = useState<'details' | 'payment' | 'processing' | 'success'>('details');
   const [orderQuantity, setOrderQuantity] = useState(1);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   // Client Info State
   const [clientInfo, setClientInfo] = useState({
@@ -35,7 +41,10 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
   const [paymentProvider, setPaymentProvider] = useState<'ORANGE' | 'MTN' | 'WAVE'>('ORANGE');
 
   const categories = ['Tout', ...Array.from(new Set(products.map(p => p.category)))];
+  
+  // --- CONSTANTES FINANCIÈRES ---
   const SHIPPING_FEES = 300;
+  const SERVICE_FEES = 200;
 
   // Filter Products
   const filteredProducts = useMemo(() => {
@@ -46,9 +55,13 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
                             product.supplierName.toLowerCase().includes(searchLower) ||
                             product.tags.some(tag => tag.toLowerCase().includes(searchLower));
       const matchesCategory = selectedCategory === 'Tout' || product.category === selectedCategory;
-      return matchesSearch && matchesCategory;
+      
+      // MODIFICATION : Filtre par fournisseur si un fournisseur est sélectionné
+      const matchesSupplier = selectedSupplierFilter ? product.supplierId === selectedSupplierFilter.id : true;
+
+      return matchesSearch && matchesCategory && matchesSupplier;
     });
-  }, [products, searchTerm, selectedCategory]);
+  }, [products, searchTerm, selectedCategory, selectedSupplierFilter]);
 
   // Filter Suppliers (Only Available ones)
   const filteredSuppliers = useMemo(() => {
@@ -65,9 +78,32 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
     });
   }, [suppliers, searchTerm, selectedCategory]);
 
+  // --- ACTIONS DE NAVIGATION ---
+
+  const handleSelectSupplier = (supplier: Supplier) => {
+    setSelectedSupplierFilter(supplier);
+    setActiveTab('products'); // Bascule vers la vue produits
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleBackToSuppliers = () => {
+    setSelectedSupplierFilter(null);
+    setActiveTab('suppliers');
+  };
+
+  const handleTabChange = (tab: TabView) => {
+    setActiveTab(tab);
+    if (tab === 'suppliers') {
+      setSelectedSupplierFilter(null); // Réinitialise le filtre si on clique sur l'onglet Fournisseurs
+    }
+  };
+
+  // --- LOGIQUE COMMANDE ---
+
   const handleCloseModal = () => {
     setSelectedProduct(null);
     setOrderQuantity(1);
+    setErrorMessage(null);
   };
 
   const handleStartCheckout = () => {
@@ -76,12 +112,14 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
       setCheckoutStep('details');
       setPaymentMethod('MOBILE_MONEY'); // Default
       setClientInfo({ name: '', location: '', contact: '' });
+      setErrorMessage(null);
     }
   };
 
   const handleClientInfoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setClientInfo(prev => ({ ...prev, [name]: value }));
+    setErrorMessage(null);
   };
 
   const canProceedToPayment = () => {
@@ -92,10 +130,12 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
     if (!selectedProduct) return;
 
     setCheckoutStep('processing');
+    setErrorMessage(null);
     
     try {
       const productTotal = selectedProduct.price * orderQuantity;
-      const totalAmount = productTotal + SHIPPING_FEES;
+      // Calcul du total incluant Livraison + Service
+      const totalAmount = productTotal + SHIPPING_FEES + SERVICE_FEES;
 
       let finalPaymentDetails: PaymentDetails;
 
@@ -119,6 +159,7 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
           quantity: orderQuantity,
           totalPrice: totalAmount,
           shippingFees: SHIPPING_FEES,
+          serviceFees: SERVICE_FEES, // Ajout des frais de service
           supplierId: selectedProduct.supplierId,
           customerName: clientInfo.name || 'Anonyme',
           customerContact: clientInfo.contact || 'Non spécifié',
@@ -128,21 +169,22 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
           paymentDetails: finalPaymentDetails
       };
 
-      // Appel asynchrone réel
+      // Appel ASYNCHRONE réel vers Firebase
       await onCreateOrder(newOrder);
 
       setCheckoutStep('success');
       
-      // Fermeture automatique
+      // Fermeture automatique après succès
       setTimeout(() => {
           setIsCheckoutOpen(false);
           handleCloseModal();
           setCheckoutStep('details');
       }, 6000); 
 
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erreur lors du traitement:", err);
-      setCheckoutStep('details'); // En théorie inaccessible car App.tsx intercepte tout
+      setErrorMessage(err.message || "Une erreur est survenue lors de l'enregistrement.");
+      setCheckoutStep('payment'); 
     }
   };
 
@@ -154,7 +196,18 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
         {/* Tabs */}
         <div className="flex space-x-4 mb-6 border-b border-slate-200">
           <button
-            onClick={() => setActiveTab('products')}
+            onClick={() => handleTabChange('suppliers')}
+            className={`pb-3 px-1 flex items-center font-medium text-sm transition-colors border-b-2 ${
+              activeTab === 'suppliers' 
+                ? 'border-indigo-600 text-indigo-600' 
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Users className="w-4 h-4 mr-2" />
+            Fournisseurs
+          </button>
+          <button
+            onClick={() => handleTabChange('products')}
             className={`pb-3 px-1 flex items-center font-medium text-sm transition-colors border-b-2 ${
               activeTab === 'products' 
                 ? 'border-indigo-600 text-indigo-600' 
@@ -163,17 +216,6 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
           >
             <LayoutGrid className="w-4 h-4 mr-2" />
             Produits
-          </button>
-          <button
-            onClick={() => setActiveTab('suppliers')}
-            className={`pb-3 px-1 flex items-center font-medium text-sm transition-colors border-b-2 ${
-              activeTab === 'suppliers' 
-                ? 'border-indigo-600 text-indigo-600' 
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <Users className="w-4 h-4 mr-2" />
-            Fournisseurs Disponibles
           </button>
         </div>
 
@@ -212,65 +254,101 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
       {/* Content Area */}
       {activeTab === 'products' ? (
         // PRODUCTS GRID
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredProducts.map(product => (
-            <div key={product.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow flex flex-col">
-              <div className="h-48 overflow-hidden relative cursor-pointer" onClick={() => setSelectedProduct(product)}>
-                <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover hover:scale-105 transition-transform duration-300" />
-                <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm px-2 py-1 rounded text-xs font-semibold text-slate-700 shadow-sm">
-                  {product.category}
+        <div>
+          {/* En-tête fournisseur si filtré */}
+          {selectedSupplierFilter && (
+            <div className="mb-6 bg-indigo-50 border border-indigo-100 p-4 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center">
+                <div className="bg-white p-2 rounded-full shadow-sm mr-3">
+                  <Building2 className="w-6 h-6 text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-xs text-indigo-500 font-bold uppercase">Boutique de</p>
+                  <h3 className="text-lg font-bold text-indigo-900">{selectedSupplierFilter.name}</h3>
                 </div>
               </div>
-              <div className="p-5 flex-1 flex flex-col">
-                <div className="flex justify-between items-start mb-2">
-                  <h3 
-                    className="text-lg font-bold text-slate-900 line-clamp-1 cursor-pointer hover:text-indigo-600"
-                    onClick={() => setSelectedProduct(product)}
-                  >
-                    {product.name}
-                  </h3>
-                  <span className="text-indigo-600 font-bold bg-indigo-50 px-2 py-1 rounded-md whitespace-nowrap">{product.price.toLocaleString()} FCFA</span>
-                </div>
-                <p className="text-slate-500 text-sm mb-4 line-clamp-2 flex-1">{product.description}</p>
-                
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {product.tags.map(tag => (
-                    <span key={tag} className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-600">
-                      <Tag className="w-3 h-3 mr-1 opacity-50" />
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="border-t border-slate-100 pt-4 flex items-center justify-between mt-auto">
-                  <div className="flex items-center text-sm text-slate-500">
-                    <span className="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span>
-                    {product.supplierName}
-                  </div>
-                  <button 
-                    onClick={() => setSelectedProduct(product)}
-                    className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
-                  >
-                    Voir détails
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-          {filteredProducts.length === 0 && (
-            <div className="col-span-full text-center py-20">
-              <p className="text-slate-400 text-lg">Aucun produit ne correspond à votre recherche.</p>
+              <button 
+                onClick={handleBackToSuppliers}
+                className="flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-800 bg-white px-3 py-2 rounded-lg border border-indigo-100 shadow-sm"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Retour aux fournisseurs
+              </button>
             </div>
           )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredProducts.map(product => (
+              <div key={product.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow flex flex-col">
+                <div className="h-48 overflow-hidden relative cursor-pointer" onClick={() => setSelectedProduct(product)}>
+                  <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover hover:scale-105 transition-transform duration-300" />
+                  <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm px-2 py-1 rounded text-xs font-semibold text-slate-700 shadow-sm">
+                    {product.category}
+                  </div>
+                </div>
+                <div className="p-5 flex-1 flex flex-col">
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 
+                      className="text-lg font-bold text-slate-900 line-clamp-1 cursor-pointer hover:text-indigo-600"
+                      onClick={() => setSelectedProduct(product)}
+                    >
+                      {product.name}
+                    </h3>
+                    <span className="text-indigo-600 font-bold bg-indigo-50 px-2 py-1 rounded-md whitespace-nowrap">{product.price.toLocaleString()} FCFA</span>
+                  </div>
+                  <p className="text-slate-500 text-sm mb-4 line-clamp-2 flex-1">{product.description}</p>
+                  
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {product.tags.map(tag => (
+                      <span key={tag} className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-600">
+                        <Tag className="w-3 h-3 mr-1 opacity-50" />
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="border-t border-slate-100 pt-4 flex items-center justify-between mt-auto">
+                    <div className="flex items-center text-sm text-slate-500">
+                      <span className="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span>
+                      {product.supplierName}
+                    </div>
+                    <button 
+                      onClick={() => setSelectedProduct(product)}
+                      className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                    >
+                      Voir détails
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {filteredProducts.length === 0 && (
+              <div className="col-span-full text-center py-20">
+                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                   <ShoppingBag className="w-8 h-8 text-slate-400" />
+                </div>
+                <p className="text-slate-500 text-lg">Aucun produit trouvé {selectedSupplierFilter ? "pour ce fournisseur" : ""}.</p>
+                {selectedSupplierFilter && (
+                   <button onClick={handleBackToSuppliers} className="mt-4 text-indigo-600 font-medium hover:underline">
+                     Voir les autres fournisseurs
+                   </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         // SUPPLIERS GRID
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredSuppliers.map(supplier => (
-            <div key={supplier.id} className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow">
+            <div 
+               key={supplier.id} 
+               onClick={() => handleSelectSupplier(supplier)}
+               className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-all cursor-pointer group hover:border-indigo-200"
+            >
               <div className="flex items-center justify-between mb-4">
-                <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
-                  <Building2 className="w-6 h-6 text-indigo-600" />
+                <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center group-hover:bg-indigo-600 transition-colors">
+                  <Building2 className="w-6 h-6 text-indigo-600 group-hover:text-white transition-colors" />
                 </div>
                 {supplier.verified && (
                   <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
@@ -280,7 +358,7 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
                 )}
               </div>
               
-              <h3 className="text-xl font-bold text-slate-900 mb-1">{supplier.name}</h3>
+              <h3 className="text-xl font-bold text-slate-900 mb-1 group-hover:text-indigo-600 transition-colors">{supplier.name}</h3>
               <p className="text-slate-500 text-sm mb-3">{supplier.category}</p>
               
               <div className="flex items-center mb-4 text-sm">
@@ -299,8 +377,8 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
                  <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-1 rounded">
                    • Disponible
                  </span>
-                 <button className="text-sm font-medium text-indigo-600 hover:text-indigo-800">
-                   Voir le profil
+                 <button className="text-sm font-medium text-indigo-600 hover:text-indigo-800 flex items-center">
+                   Voir les produits <ArrowLeft className="w-4 h-4 ml-1 rotate-180" />
                  </button>
               </div>
             </div>
@@ -397,6 +475,18 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
 
             {/* Body */}
             <div className="p-6 overflow-y-auto max-h-[80vh]">
+              
+              {errorMessage && (
+                <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start text-red-800">
+                  <AlertCircle className="w-5 h-5 mr-2 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-sm">Erreur de commande</p>
+                    <p className="text-sm mt-1">{errorMessage}</p>
+                    <p className="text-xs mt-2">Vérifiez votre connexion internet et réessayez.</p>
+                  </div>
+                </div>
+              )}
+
               {checkoutStep === 'details' && (
                 <div className="space-y-6">
                   <div className="flex items-start space-x-4 bg-slate-50 p-4 rounded-lg border border-slate-100">
@@ -471,7 +561,7 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
                      </div>
                   </div>
 
-                  {/* Résumé des coûts */}
+                  {/* Résumé des coûts AVEC FRAIS DE SERVICE */}
                   <div className="bg-slate-50 rounded-lg p-4 space-y-2 border border-slate-200 mt-4">
                      <div className="flex justify-between text-sm text-slate-600">
                        <span>Sous-total</span>
@@ -481,9 +571,13 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
                        <span>Frais de livraison</span>
                        <span>{SHIPPING_FEES.toLocaleString()} FCFA</span>
                      </div>
+                     <div className="flex justify-between text-sm text-slate-600">
+                       <span>Frais de service</span>
+                       <span>{SERVICE_FEES.toLocaleString()} FCFA</span>
+                     </div>
                      <div className="border-t border-slate-200 pt-2 flex justify-between font-bold text-slate-900 text-lg">
                        <span>Total à payer</span>
-                       <span>{((selectedProduct.price * orderQuantity) + SHIPPING_FEES).toLocaleString()} FCFA</span>
+                       <span>{((selectedProduct.price * orderQuantity) + SHIPPING_FEES + SERVICE_FEES).toLocaleString()} FCFA</span>
                      </div>
                   </div>
 
@@ -505,7 +599,7 @@ export const ClientMarketplace: React.FC<ClientMarketplaceProps> = ({ products, 
                 <div className="space-y-6">
                    <div className="text-center mb-4">
                       <p className="text-sm text-slate-500">Montant total de la commande</p>
-                      <p className="text-3xl font-bold text-slate-900">{((selectedProduct.price * orderQuantity) + SHIPPING_FEES).toLocaleString()} FCFA</p>
+                      <p className="text-3xl font-bold text-slate-900">{((selectedProduct.price * orderQuantity) + SHIPPING_FEES + SERVICE_FEES).toLocaleString()} FCFA</p>
                    </div>
 
                    <div>
